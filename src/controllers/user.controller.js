@@ -1,8 +1,23 @@
-import {asyncHandler} from "../utility/asyncHandler.js"
+import {asyncHandler} from "../utility/asynchandler.js"
 import {ApiError} from "../utility/ApiError.js"
 import {User} from "../models/user.model.js"
 import {uploadOnCloudinary} from "../utility/cloudinary.js"
 import {ApiResponse} from "../utility/ApiResponse.js"
+import jwt from "jsonwebtoken"
+import mongoose from "mongoose";
+const generateAccessAndRefreshTokens = async(userId)=>{
+  try {
+    const user =await User.findById(userId)
+    const accessToken =user.generateAccessToken()
+    const refreshToken=user.generateRefreshToken()
+    user.refreshToken=refreshToken
+    user.save({validateBeforeSave:false})
+    return {accessToken,refreshToken}
+  } catch (error) {
+    throw new ApiError(500,"something went wrong with generating access and refresh token")
+    
+  }
+}
 const registerUser =asyncHandler(async(req,res)=>{
   // get user data from frontend (we can also get data from postman if no frontend)
   //validation
@@ -25,15 +40,19 @@ if(
 }
 //checking if user already existed
 
-const existedUser= User.findOne({
-  $or:[username,email]
-})
+const existedUser= await User.findOne({
+  $or:[{username},{email}]
+});
 if(existedUser){
-  throw new ApiError(409,"user with email or password already existed")
+  throw new ApiError(409,"user with email or username already existed")
 }
 //checking for files withfiles which we got from middleware-multrer(upload) 
 const avatarLocalPath =req.files?.avatar[0]?.path 
-const coverImageLocalPath=req.files?.coverImage[0]?.path
+//const coverImageLocalPath=req.files?.coverImage[0]?.path
+let coverImageLocalPath;
+if(req.files&&Array.isArray(req.files.coverImage)&&req.files.coverImage.length>0){
+  coverImageLocalPath= req.files.coverImage[0].path
+}
 if(!avatarLocalPath){
   throw new ApiError(400,"Avatar is required")
 }
@@ -49,7 +68,7 @@ const user =await User.create({
   avatar:avatar.url,
   coverImage:coverImage?.url||"",
   email,
-  paaword,
+  password,
   username:username.toLowerCase()
 })
 //selecting id and removing password and refreshtoken
@@ -62,4 +81,77 @@ return res.status(201).json(
 )
   
 })
-export {registerUser}
+const loginUser=asyncHandler(async(req,res)=>{
+  //req body->data
+  //valid through email or username
+  //find user
+  //check password
+  //generate access and refresh and access token
+  //send access and refresh token through cookies
+  const {username,email,password}=req.body
+  if(!username&&!email){
+    throw new ApiError(400,"username or email is required")
+  }
+  //find user
+  const user =await User.findOne({
+    $or:[{username},{email}]
+  })
+  if(!user){
+    throw new ApiError(404,"user not found")
+  }
+    //check password
+const isPsswordValid =await user.isPasswordCorrect(password)
+if(!isPsswordValid){
+  throw new ApiError(401,"user credentials wrong")
+}
+const {accessToken,refreshToken}=await generateAccessAndRefreshTokens(user._id)
+//expensive method as ek aur bar database call kar raha ha
+const loggedInUser=await User.findById(user._id).select("-password -refreshToken" )
+const options={
+  httpOnly :true,
+  secure:true
+}
+return res
+.status(200)
+.cookie("accessToken",accessToken,options)
+.cookie("refreshToken",refreshToken,options)
+.json(
+  new ApiResponse(
+    200,
+    {
+      user: loggedInUser,accessToken,refreshToken
+    },
+    "user logged in successfully"
+  )
+)
+})
+const logoutUser =  asyncHandler(async(req,res)=>{
+//find he user
+//delete refreshtoken from database and cookies
+await User.findByIdAndUpdate(
+  req.user._id,
+  {
+    $set:{
+      refreshToken:undefined
+    }
+  },
+  {
+    new:true
+  }
+)
+//deletion of cookies
+const options={
+  httpOnly :true,
+  secure:true
+}
+return res.status(200)
+.clearCookie("accessToken",options)
+.clearCookie("refreshToken",options)
+.json(new ApiResponse(
+  200,{},"user logged out"
+))
+})
+
+export {registerUser,
+  loginUser,logoutUser,
+}
