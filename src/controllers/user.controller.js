@@ -380,7 +380,8 @@ const user = await User.aggregate([
     }
   }
 ])
-retuen res.status(200)
+retuen res
+.status(200)
 .json(new ApiResponse(200, user[0].watchHistory,"Watch history fetched successsfully"))
 })
 export {registerUser,
